@@ -433,11 +433,13 @@ function RevealCard({
   team: Team;
   process: { title: string; steps: string[] };
   userOrder: string[];
-  result: { points: number; correctPositions: number };
+  result: { points: number; correctPositions: number; timedOut: boolean };
   isLast: boolean;
   onNext: () => void;
 }) {
   const perfect = userOrder.every((s, i) => s === process.steps[i]);
+  const label = perfect ? "Perfect order!" : result.timedOut ? "Time's up!" : "Results";
+  const labelColor = perfect ? "var(--success)" : result.timedOut ? "var(--destructive)" : "var(--accent)";
   return (
     <div
       className="rounded-2xl p-6 sm:p-8 border border-border shadow-2xl"
@@ -447,9 +449,9 @@ function RevealCard({
         <div>
           <div
             className="text-xs uppercase tracking-widest font-semibold"
-            style={{ color: perfect ? "var(--success)" : "var(--accent)" }}
+            style={{ color: labelColor }}
           >
-            {perfect ? "Perfect order!" : "Results"}
+            {label}
           </div>
           <h2 className="mt-1 text-2xl sm:text-3xl font-bold">{process.title}</h2>
           <p className="mt-1 text-muted-foreground">
