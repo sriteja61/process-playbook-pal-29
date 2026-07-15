@@ -287,6 +287,8 @@ function PlayCard({
   onMove,
   onSubmit,
   onShuffle,
+  timeLeft,
+  totalTime,
 }: {
   team: Team;
   round: number;
@@ -296,7 +298,12 @@ function PlayCard({
   onMove: (i: number, dir: -1 | 1) => void;
   onSubmit: () => void;
   onShuffle: () => void;
+  timeLeft: number;
+  totalTime: number;
 }) {
+  const pct = Math.max(0, Math.min(100, (timeLeft / totalTime) * 100));
+  const urgent = timeLeft <= 10;
+  const timerColor = urgent ? "var(--destructive)" : "var(--primary)";
   return (
     <div
       className="rounded-2xl p-6 sm:p-8 border border-border shadow-2xl"
@@ -312,17 +319,47 @@ function PlayCard({
             Reorder the {process.steps.length} steps from first to last, then lock it in.
           </p>
         </div>
-        <div
-          className="w-16 h-16 rounded-2xl grid place-items-center text-3xl font-black shadow-lg shrink-0"
-          style={{
-            background: "var(--gradient-hero)",
-            color: "var(--primary-foreground)",
-            boxShadow: "var(--shadow-glow)",
-          }}
-        >
-          {team}
+        <div className="flex items-center gap-3 shrink-0">
+          <div
+            className={cn(
+              "flex items-center gap-2 px-3 py-2 rounded-xl border font-mono font-bold tabular-nums text-lg transition",
+              urgent ? "animate-pulse" : "",
+            )}
+            style={{
+              borderColor: timerColor,
+              color: timerColor,
+              background: urgent ? "oklch(0.65 0.24 25 / 0.1)" : "oklch(0.72 0.18 195 / 0.08)",
+            }}
+            aria-label={`Time left ${timeLeft} seconds`}
+          >
+            <Timer className="w-4 h-4" />
+            {String(Math.floor(timeLeft / 60)).padStart(1, "0")}:{String(timeLeft % 60).padStart(2, "0")}
+          </div>
+          <div
+            className="w-16 h-16 rounded-2xl grid place-items-center text-3xl font-black shadow-lg"
+            style={{
+              background: "var(--gradient-hero)",
+              color: "var(--primary-foreground)",
+              boxShadow: "var(--shadow-glow)",
+            }}
+          >
+            {team}
+          </div>
         </div>
       </div>
+
+      <div className="mt-4 h-1.5 rounded-full bg-muted overflow-hidden">
+        <div
+          className="h-full transition-all duration-1000 ease-linear"
+          style={{
+            width: `${pct}%`,
+            background: urgent
+              ? "linear-gradient(90deg, var(--destructive), oklch(0.78 0.16 60))"
+              : "var(--gradient-hero)",
+          }}
+        />
+      </div>
+
 
       <ol className="mt-6 space-y-2">
         {order.map((step, i) => (
