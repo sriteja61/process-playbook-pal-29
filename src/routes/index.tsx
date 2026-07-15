@@ -186,8 +186,10 @@ function Game() {
                 process={currentProcess}
                 order={order}
                 onMove={move}
-                onSubmit={submit}
+                onSubmit={() => submit(false)}
                 onShuffle={() => setOrder(shuffleSteps(currentProcess.steps))}
+                timeLeft={timeLeft}
+                totalTime={TURN_SECONDS}
               />
             )}
             {phase === "reveal" && lastResult && (
