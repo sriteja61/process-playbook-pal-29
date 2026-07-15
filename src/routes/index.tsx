@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useMemo, useState, useEffect } from "react";
 import { processes, teams, type Team } from "@/lib/processes";
-import { Trophy, ArrowUp, ArrowDown, RotateCcw, Check, X, Sparkles, ChevronRight, ListOrdered } from "lucide-react";
+import { Trophy, ArrowUp, ArrowDown, RotateCcw, Check, X, Sparkles, ChevronRight, ListOrdered, Timer } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 export const Route = createFileRoute("/")({
@@ -21,6 +21,7 @@ type Scores = Record<Team, number>;
 type Phase = "playing" | "reveal" | "done";
 
 const TOTAL_ROUNDS = 5;
+const TURN_SECONDS = 60;
 const STORAGE_KEY = "oir-game-state-v3";
 
 function shuffle<T>(arr: T[]): T[] {
@@ -51,7 +52,8 @@ function Game() {
   const [phase, setPhase] = useState<Phase>("playing");
   const [scores, setScores] = useState<Scores>({ A: 0, B: 0, C: 0, D: 0, E: 0, F: 0 });
   const [order, setOrder] = useState<string[]>([]);
-  const [lastResult, setLastResult] = useState<{ points: number; correctPositions: number } | null>(null);
+  const [lastResult, setLastResult] = useState<{ points: number; correctPositions: number; timedOut: boolean } | null>(null);
+  const [timeLeft, setTimeLeft] = useState(TURN_SECONDS);
 
   // Load persisted state
   useEffect(() => {
