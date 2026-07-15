@@ -14,7 +14,7 @@ export const Route = createFileRoute("/")({
       { property: "og:type", content: "website" },
     ],
   }),
-  component: Game;
+  component: Game,
 });
 
 type Scores = Record<Team, number>;
