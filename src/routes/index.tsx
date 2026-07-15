@@ -98,13 +98,13 @@ function Game() {
     setOrder(next);
   };
 
-  const submit = () => {
+  const submit = (timedOut = false) => {
     if (!currentProcess) return;
     const correctPositions = order.reduce((acc, s, i) => acc + (s === currentProcess.steps[i] ? 1 : 0), 0);
     const perfect = correctPositions === currentProcess.steps.length;
     const points = perfect ? correctPositions + 2 : correctPositions;
     setScores((s) => ({ ...s, [currentTeam]: s[currentTeam] + points }));
-    setLastResult({ points, correctPositions });
+    setLastResult({ points, correctPositions, timedOut });
     setPhase("reveal");
   };
 
@@ -117,8 +117,26 @@ function Game() {
     setTurn(nextIdx);
     setOrder(shuffleSteps(processes[queue[nextIdx]].steps));
     setLastResult(null);
+    setTimeLeft(TURN_SECONDS);
     setPhase("playing");
   };
+
+  // Countdown timer for playing phase
+  useEffect(() => {
+    if (phase !== "playing" || !currentProcess) return;
+    setTimeLeft(TURN_SECONDS);
+  }, [turn, phase, currentProcess]);
+
+  useEffect(() => {
+    if (phase !== "playing") return;
+    if (timeLeft <= 0) {
+      submit(true);
+      return;
+    }
+    const id = setTimeout(() => setTimeLeft((t) => t - 1), 1000);
+    return () => clearTimeout(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase, timeLeft]);
 
   const resetAll = () => {
     const q = buildQueue();
