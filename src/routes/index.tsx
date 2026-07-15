@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useMemo, useState, useEffect } from "react";
 import { processes, teams, type Team } from "@/lib/processes";
-import { Trophy, ArrowUp, ArrowDown, RotateCcw, Check, X, Sparkles, ChevronRight, ListOrdered } from "lucide-react";
+import { Trophy, ArrowUp, ArrowDown, RotateCcw, Check, X, Sparkles, ChevronRight, ListOrdered, Timer } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 export const Route = createFileRoute("/")({
@@ -21,6 +21,7 @@ type Scores = Record<Team, number>;
 type Phase = "playing" | "reveal" | "done";
 
 const TOTAL_ROUNDS = 5;
+const TURN_SECONDS = 60;
 const STORAGE_KEY = "oir-game-state-v3";
 
 function shuffle<T>(arr: T[]): T[] {
@@ -51,7 +52,8 @@ function Game() {
   const [phase, setPhase] = useState<Phase>("playing");
   const [scores, setScores] = useState<Scores>({ A: 0, B: 0, C: 0, D: 0, E: 0, F: 0 });
   const [order, setOrder] = useState<string[]>([]);
-  const [lastResult, setLastResult] = useState<{ points: number; correctPositions: number } | null>(null);
+  const [lastResult, setLastResult] = useState<{ points: number; correctPositions: number; timedOut: boolean } | null>(null);
+  const [timeLeft, setTimeLeft] = useState(TURN_SECONDS);
 
   // Load persisted state
   useEffect(() => {
@@ -96,13 +98,13 @@ function Game() {
     setOrder(next);
   };
 
-  const submit = () => {
+  const submit = (timedOut = false) => {
     if (!currentProcess) return;
     const correctPositions = order.reduce((acc, s, i) => acc + (s === currentProcess.steps[i] ? 1 : 0), 0);
     const perfect = correctPositions === currentProcess.steps.length;
     const points = perfect ? correctPositions + 2 : correctPositions;
     setScores((s) => ({ ...s, [currentTeam]: s[currentTeam] + points }));
-    setLastResult({ points, correctPositions });
+    setLastResult({ points, correctPositions, timedOut });
     setPhase("reveal");
   };
 
@@ -115,8 +117,26 @@ function Game() {
     setTurn(nextIdx);
     setOrder(shuffleSteps(processes[queue[nextIdx]].steps));
     setLastResult(null);
+    setTimeLeft(TURN_SECONDS);
     setPhase("playing");
   };
+
+  // Countdown timer for playing phase
+  useEffect(() => {
+    if (phase !== "playing" || !currentProcess) return;
+    setTimeLeft(TURN_SECONDS);
+  }, [turn, phase, currentProcess]);
+
+  useEffect(() => {
+    if (phase !== "playing") return;
+    if (timeLeft <= 0) {
+      submit(true);
+      return;
+    }
+    const id = setTimeout(() => setTimeLeft((t) => t - 1), 1000);
+    return () => clearTimeout(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase, timeLeft]);
 
   const resetAll = () => {
     const q = buildQueue();
@@ -166,8 +186,10 @@ function Game() {
                 process={currentProcess}
                 order={order}
                 onMove={move}
-                onSubmit={submit}
+                onSubmit={() => submit(false)}
                 onShuffle={() => setOrder(shuffleSteps(currentProcess.steps))}
+                timeLeft={timeLeft}
+                totalTime={TURN_SECONDS}
               />
             )}
             {phase === "reveal" && lastResult && (
@@ -265,6 +287,8 @@ function PlayCard({
   onMove,
   onSubmit,
   onShuffle,
+  timeLeft,
+  totalTime,
 }: {
   team: Team;
   round: number;
@@ -274,7 +298,12 @@ function PlayCard({
   onMove: (i: number, dir: -1 | 1) => void;
   onSubmit: () => void;
   onShuffle: () => void;
+  timeLeft: number;
+  totalTime: number;
 }) {
+  const pct = Math.max(0, Math.min(100, (timeLeft / totalTime) * 100));
+  const urgent = timeLeft <= 10;
+  const timerColor = urgent ? "var(--destructive)" : "var(--primary)";
   return (
     <div
       className="rounded-2xl p-6 sm:p-8 border border-border shadow-2xl"
@@ -290,17 +319,47 @@ function PlayCard({
             Reorder the {process.steps.length} steps from first to last, then lock it in.
           </p>
         </div>
-        <div
-          className="w-16 h-16 rounded-2xl grid place-items-center text-3xl font-black shadow-lg shrink-0"
-          style={{
-            background: "var(--gradient-hero)",
-            color: "var(--primary-foreground)",
-            boxShadow: "var(--shadow-glow)",
-          }}
-        >
-          {team}
+        <div className="flex items-center gap-3 shrink-0">
+          <div
+            className={cn(
+              "flex items-center gap-2 px-3 py-2 rounded-xl border font-mono font-bold tabular-nums text-lg transition",
+              urgent ? "animate-pulse" : "",
+            )}
+            style={{
+              borderColor: timerColor,
+              color: timerColor,
+              background: urgent ? "oklch(0.65 0.24 25 / 0.1)" : "oklch(0.72 0.18 195 / 0.08)",
+            }}
+            aria-label={`Time left ${timeLeft} seconds`}
+          >
+            <Timer className="w-4 h-4" />
+            {String(Math.floor(timeLeft / 60)).padStart(1, "0")}:{String(timeLeft % 60).padStart(2, "0")}
+          </div>
+          <div
+            className="w-16 h-16 rounded-2xl grid place-items-center text-3xl font-black shadow-lg"
+            style={{
+              background: "var(--gradient-hero)",
+              color: "var(--primary-foreground)",
+              boxShadow: "var(--shadow-glow)",
+            }}
+          >
+            {team}
+          </div>
         </div>
       </div>
+
+      <div className="mt-4 h-1.5 rounded-full bg-muted overflow-hidden">
+        <div
+          className="h-full transition-all duration-1000 ease-linear"
+          style={{
+            width: `${pct}%`,
+            background: urgent
+              ? "linear-gradient(90deg, var(--destructive), oklch(0.78 0.16 60))"
+              : "var(--gradient-hero)",
+          }}
+        />
+      </div>
+
 
       <ol className="mt-6 space-y-2">
         {order.map((step, i) => (
@@ -374,11 +433,13 @@ function RevealCard({
   team: Team;
   process: { title: string; steps: string[] };
   userOrder: string[];
-  result: { points: number; correctPositions: number };
+  result: { points: number; correctPositions: number; timedOut: boolean };
   isLast: boolean;
   onNext: () => void;
 }) {
   const perfect = userOrder.every((s, i) => s === process.steps[i]);
+  const label = perfect ? "Perfect order!" : result.timedOut ? "Time's up!" : "Results";
+  const labelColor = perfect ? "var(--success)" : result.timedOut ? "var(--destructive)" : "var(--accent)";
   return (
     <div
       className="rounded-2xl p-6 sm:p-8 border border-border shadow-2xl"
@@ -388,9 +449,9 @@ function RevealCard({
         <div>
           <div
             className="text-xs uppercase tracking-widest font-semibold"
-            style={{ color: perfect ? "var(--success)" : "var(--accent)" }}
+            style={{ color: labelColor }}
           >
-            {perfect ? "Perfect order!" : "Results"}
+            {label}
           </div>
           <h2 className="mt-1 text-2xl sm:text-3xl font-bold">{process.title}</h2>
           <p className="mt-1 text-muted-foreground">
