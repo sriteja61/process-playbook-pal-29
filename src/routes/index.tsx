@@ -437,18 +437,16 @@ function ChoiceCard({
             onClick={() => onPick(idx)}
             className="group text-left p-5 rounded-xl border border-border bg-card hover:border-primary transition-all hover:shadow-lg hover:scale-[1.02]"
           >
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-4 py-4">
               <div
-                className="w-10 h-10 rounded-lg grid place-items-center font-black text-lg shrink-0"
+                className="w-16 h-16 rounded-xl grid place-items-center font-black text-3xl shrink-0"
                 style={{ background: "var(--gradient-hero)", color: "var(--primary-foreground)" }}
               >
                 {String.fromCharCode(65 + i)}
               </div>
               <div className="flex-1">
-                <div className="font-semibold leading-snug">{processes[idx].title}</div>
-                <div className="text-xs text-muted-foreground mt-0.5">
-                  {processes[idx].steps.length} steps
-                </div>
+                <div className="font-semibold leading-snug text-lg">Mystery Box {String.fromCharCode(65 + i)}</div>
+                <div className="text-xs text-muted-foreground mt-1">Pick blindly — reveal on selection</div>
               </div>
               <ChevronRight className="w-5 h-5 text-muted-foreground group-hover:text-primary transition" />
             </div>
