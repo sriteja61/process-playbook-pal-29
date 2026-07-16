@@ -1,16 +1,29 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useMemo, useState, useEffect } from "react";
 import { processes, teams, type Team } from "@/lib/processes";
-import { Trophy, ArrowUp, ArrowDown, RotateCcw, Check, X, Sparkles, ChevronRight, ListOrdered, Timer } from "lucide-react";
+import {
+  Trophy,
+  ArrowUp,
+  ArrowDown,
+  RotateCcw,
+  Check,
+  X,
+  Sparkles,
+  ChevronRight,
+  ListOrdered,
+  Timer,
+  Play,
+  Shuffle,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 
 export const Route = createFileRoute("/")({
   head: () => ({
     meta: [
       { title: "OIR — Order It Right" },
-      { name: "description", content: "Order It Right (OIR): a team game to arrange security process steps in the correct order." },
+      { name: "description", content: "Order It Right (OIR): a team game where teams pick a security process and arrange the steps in the correct order." },
       { property: "og:title", content: "OIR — Order It Right" },
-      { property: "og:description", content: "Teams take turns arranging security process steps in the right order." },
+      { property: "og:description", content: "Teams pick a topic and race to arrange security process steps in the right order." },
       { property: "og:type", content: "website" },
     ],
   }),
@@ -18,11 +31,13 @@ export const Route = createFileRoute("/")({
 });
 
 type Scores = Record<Team, number>;
-type Phase = "playing" | "reveal" | "done";
+type Phase = "idle" | "choosing" | "playing" | "reveal" | "done";
 
 const TOTAL_ROUNDS = 5;
 const TURN_SECONDS = 60;
-const STORAGE_KEY = "oir-game-state-v3";
+const CHOICES_PER_TURN = 4;
+const PERFECT_POINTS = 10;
+const STORAGE_KEY = "oir-game-state-v4";
 
 function shuffle<T>(arr: T[]): T[] {
   const a = [...arr];
@@ -39,56 +54,72 @@ function shuffleSteps(steps: string[]): string[] {
   return s;
 }
 
-function buildQueue(): number[] {
-  // Pick TOTAL_ROUNDS * teams.length unique processes from the pool
-  const needed = TOTAL_ROUNDS * teams.length;
-  const pool = shuffle(processes.map((_, i) => i));
-  return pool.slice(0, needed);
+function pickChoices(used: number[]): number[] {
+  const remaining = processes
+    .map((_, i) => i)
+    .filter((i) => !used.includes(i));
+  return shuffle(remaining).slice(0, Math.min(CHOICES_PER_TURN, remaining.length));
 }
 
 function Game() {
-  const [queue, setQueue] = useState<number[]>([]);
-  const [turn, setTurn] = useState(0); // 0..(TOTAL_ROUNDS*teams.length - 1)
-  const [phase, setPhase] = useState<Phase>("playing");
+  const [phase, setPhase] = useState<Phase>("idle");
+  const [turn, setTurn] = useState(0);
   const [scores, setScores] = useState<Scores>({ A: 0, B: 0, C: 0, D: 0, E: 0, F: 0 });
+  const [used, setUsed] = useState<number[]>([]);
+  const [choices, setChoices] = useState<number[]>([]);
+  const [currentIdx, setCurrentIdx] = useState<number | null>(null);
   const [order, setOrder] = useState<string[]>([]);
-  const [lastResult, setLastResult] = useState<{ points: number; correctPositions: number; timedOut: boolean } | null>(null);
+  const [lastResult, setLastResult] = useState<{ perfect: boolean; correctPositions: number; timedOut: boolean } | null>(null);
   const [timeLeft, setTimeLeft] = useState(TURN_SECONDS);
 
-  // Load persisted state
+  // Load persisted
   useEffect(() => {
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
       if (raw) {
         const s = JSON.parse(raw);
-        if (Array.isArray(s.queue) && s.queue.length) {
-          setQueue(s.queue);
-          setTurn(s.turn ?? 0);
-          setScores(s.scores ?? { A: 0, B: 0, C: 0, D: 0, E: 0, F: 0 });
-          setOrder(s.order ?? []);
-          setPhase(s.phase ?? "playing");
-          return;
-        }
+        setPhase(s.phase ?? "idle");
+        setTurn(s.turn ?? 0);
+        setScores(s.scores ?? { A: 0, B: 0, C: 0, D: 0, E: 0, F: 0 });
+        setUsed(s.used ?? []);
+        setChoices(s.choices ?? []);
+        setCurrentIdx(s.currentIdx ?? null);
+        setOrder(s.order ?? []);
       }
     } catch {}
-    const q = buildQueue();
-    setQueue(q);
-    setOrder(shuffleSteps(processes[q[0]].steps));
   }, []);
 
   // Persist
   useEffect(() => {
-    if (!queue.length) return;
     localStorage.setItem(
       STORAGE_KEY,
-      JSON.stringify({ queue, turn, scores, order, phase }),
+      JSON.stringify({ phase, turn, scores, used, choices, currentIdx, order }),
     );
-  }, [queue, turn, scores, order, phase]);
+  }, [phase, turn, scores, used, choices, currentIdx, order]);
 
   const totalTurns = TOTAL_ROUNDS * teams.length;
   const currentTeam: Team = teams[turn % teams.length];
   const currentRound = Math.floor(turn / teams.length) + 1;
-  const currentProcess = queue.length ? processes[queue[turn]] : null;
+  const currentProcess = currentIdx != null ? processes[currentIdx] : null;
+
+  const startGame = () => {
+    setScores({ A: 0, B: 0, C: 0, D: 0, E: 0, F: 0 });
+    setTurn(0);
+    setUsed([]);
+    setChoices(pickChoices([]));
+    setCurrentIdx(null);
+    setOrder([]);
+    setLastResult(null);
+    setPhase("choosing");
+  };
+
+  const chooseTopic = (idx: number) => {
+    setCurrentIdx(idx);
+    setOrder(shuffleSteps(processes[idx].steps));
+    setTimeLeft(TURN_SECONDS);
+    setLastResult(null);
+    setPhase("playing");
+  };
 
   const move = (i: number, dir: -1 | 1) => {
     const j = i + dir;
@@ -100,33 +131,36 @@ function Game() {
 
   const submit = (timedOut = false) => {
     if (!currentProcess) return;
-    const correctPositions = order.reduce((acc, s, i) => acc + (s === currentProcess.steps[i] ? 1 : 0), 0);
+    const correctPositions = order.reduce(
+      (acc, s, i) => acc + (s === currentProcess.steps[i] ? 1 : 0),
+      0,
+    );
     const perfect = correctPositions === currentProcess.steps.length;
-    const points = perfect ? correctPositions + 2 : correctPositions;
+    const points = perfect ? PERFECT_POINTS : 0;
     setScores((s) => ({ ...s, [currentTeam]: s[currentTeam] + points }));
-    setLastResult({ points, correctPositions, timedOut });
+    setLastResult({ perfect, correctPositions, timedOut });
     setPhase("reveal");
   };
 
   const nextTurn = () => {
-    if (turn + 1 >= totalTurns) {
-      setPhase("done");
-      return;
+    if (currentIdx != null) {
+      const newUsed = [...used, currentIdx];
+      setUsed(newUsed);
+      if (turn + 1 >= totalTurns) {
+        setCurrentIdx(null);
+        setPhase("done");
+        return;
+      }
+      setTurn(turn + 1);
+      setCurrentIdx(null);
+      setOrder([]);
+      setLastResult(null);
+      setChoices(pickChoices(newUsed));
+      setPhase("choosing");
     }
-    const nextIdx = turn + 1;
-    setTurn(nextIdx);
-    setOrder(shuffleSteps(processes[queue[nextIdx]].steps));
-    setLastResult(null);
-    setTimeLeft(TURN_SECONDS);
-    setPhase("playing");
   };
 
-  // Countdown timer for playing phase
-  useEffect(() => {
-    if (phase !== "playing" || !currentProcess) return;
-    setTimeLeft(TURN_SECONDS);
-  }, [turn, phase, currentProcess]);
-
+  // Timer
   useEffect(() => {
     if (phase !== "playing") return;
     if (timeLeft <= 0) {
@@ -139,22 +173,21 @@ function Game() {
   }, [phase, timeLeft]);
 
   const resetAll = () => {
-    const q = buildQueue();
-    setQueue(q);
+    localStorage.removeItem(STORAGE_KEY);
+    setPhase("idle");
     setTurn(0);
     setScores({ A: 0, B: 0, C: 0, D: 0, E: 0, F: 0 });
-    setOrder(shuffleSteps(processes[q[0]].steps));
+    setUsed([]);
+    setChoices([]);
+    setCurrentIdx(null);
+    setOrder([]);
     setLastResult(null);
-    setPhase("playing");
-    localStorage.removeItem(STORAGE_KEY);
   };
 
   const leaderboard = useMemo(
     () => (Object.entries(scores) as [Team, number][]).sort((a, b) => b[1] - a[1]),
     [scores],
   );
-
-  if (!currentProcess) return null;
 
   return (
     <div className="min-h-screen bg-background text-foreground relative overflow-hidden">
@@ -174,43 +207,58 @@ function Game() {
           turn={turn}
           totalTurns={totalTurns}
           onReset={resetAll}
+          showProgress={phase !== "idle"}
         />
 
-        <div className="grid lg:grid-cols-[1fr_320px] gap-6 mt-8">
-          <div className="min-h-[520px]">
-            {phase === "playing" && (
-              <PlayCard
-                team={currentTeam}
-                round={currentRound}
-                totalRounds={TOTAL_ROUNDS}
-                process={currentProcess}
-                order={order}
-                onMove={move}
-                onSubmit={() => submit(false)}
-                onShuffle={() => setOrder(shuffleSteps(currentProcess.steps))}
-                timeLeft={timeLeft}
-                totalTime={TURN_SECONDS}
-              />
-            )}
-            {phase === "reveal" && lastResult && (
-              <RevealCard
-                team={currentTeam}
-                process={currentProcess}
-                userOrder={order}
-                result={lastResult}
-                isLast={turn + 1 >= totalTurns}
-                onNext={nextTurn}
-              />
-            )}
-            {phase === "done" && <FinalCard leaderboard={leaderboard} onReset={resetAll} />}
-          </div>
+        {phase === "idle" ? (
+          <StartScreen onStart={startGame} />
+        ) : (
+          <div className="grid lg:grid-cols-[1fr_320px] gap-6 mt-8">
+            <div className="min-h-[520px]">
+              {phase === "choosing" && (
+                <ChoiceCard
+                  team={currentTeam}
+                  round={currentRound}
+                  totalRounds={TOTAL_ROUNDS}
+                  choices={choices}
+                  onPick={chooseTopic}
+                  onReshuffle={() => setChoices(pickChoices(used))}
+                />
+              )}
+              {phase === "playing" && currentProcess && (
+                <PlayCard
+                  team={currentTeam}
+                  round={currentRound}
+                  totalRounds={TOTAL_ROUNDS}
+                  process={currentProcess}
+                  order={order}
+                  onMove={move}
+                  onSubmit={() => submit(false)}
+                  onShuffle={() => setOrder(shuffleSteps(currentProcess.steps))}
+                  timeLeft={timeLeft}
+                  totalTime={TURN_SECONDS}
+                />
+              )}
+              {phase === "reveal" && currentProcess && lastResult && (
+                <RevealCard
+                  team={currentTeam}
+                  process={currentProcess}
+                  userOrder={order}
+                  result={lastResult}
+                  isLast={turn + 1 >= totalTurns}
+                  onNext={nextTurn}
+                />
+              )}
+              {phase === "done" && <FinalCard leaderboard={leaderboard} onReset={resetAll} />}
+            </div>
 
-          <Leaderboard
-            leaderboard={leaderboard}
-            currentTeam={phase === "playing" ? currentTeam : null}
-            upNext={phase === "reveal" && turn + 1 < totalTurns ? teams[(turn + 1) % teams.length] : null}
-          />
-        </div>
+            <Leaderboard
+              leaderboard={leaderboard}
+              currentTeam={phase === "choosing" || phase === "playing" ? currentTeam : null}
+              upNext={phase === "reveal" && turn + 1 < totalTurns ? teams[(turn + 1) % teams.length] : null}
+            />
+          </div>
+        )}
       </div>
     </div>
   );
@@ -222,12 +270,14 @@ function Header({
   turn,
   totalTurns,
   onReset,
+  showProgress,
 }: {
   round: number;
   totalRounds: number;
   turn: number;
   totalTurns: number;
   onReset: () => void;
+  showProgress: boolean;
 }) {
   const pct = Math.min(100, (turn / totalTurns) * 100);
   return (
@@ -248,7 +298,7 @@ function Header({
               OIR — Order It Right
             </h1>
             <p className="text-xs sm:text-sm text-muted-foreground">
-              Round {round} of {totalRounds} · teams take turns in order
+              Round {round} of {totalRounds} · teams pick a topic then order the steps
             </p>
           </div>
         </div>
@@ -260,21 +310,164 @@ function Header({
         </button>
       </div>
 
-      <div className="mt-6">
-        <div className="flex justify-between text-xs text-muted-foreground mb-2">
-          <span>
-            Turn {Math.min(turn + 1, totalTurns)} / {totalTurns}
-          </span>
-          <span>{Math.round(pct)}%</span>
+      {showProgress && (
+        <div className="mt-6">
+          <div className="flex justify-between text-xs text-muted-foreground mb-2">
+            <span>
+              Turn {Math.min(turn + 1, totalTurns)} / {totalTurns}
+            </span>
+            <span>{Math.round(pct)}%</span>
+          </div>
+          <div className="h-2 rounded-full bg-muted overflow-hidden">
+            <div
+              className="h-full transition-all duration-500"
+              style={{ width: `${pct}%`, background: "var(--gradient-hero)" }}
+            />
+          </div>
         </div>
-        <div className="h-2 rounded-full bg-muted overflow-hidden">
-          <div
-            className="h-full transition-all duration-500"
-            style={{ width: `${pct}%`, background: "var(--gradient-hero)" }}
-          />
+      )}
+    </header>
+  );
+}
+
+function StartScreen({ onStart }: { onStart: () => void }) {
+  return (
+    <div
+      className="mt-10 rounded-2xl p-8 sm:p-12 border border-border shadow-2xl text-center"
+      style={{ background: "var(--gradient-card)" }}
+    >
+      <div className="inline-flex items-center gap-2 text-xs uppercase tracking-widest text-primary font-semibold">
+        <Sparkles className="w-4 h-4" /> Ready to play
+      </div>
+      <h2
+        className="mt-4 text-4xl sm:text-6xl font-black tracking-tight bg-clip-text text-transparent"
+        style={{ backgroundImage: "var(--gradient-hero)" }}
+      >
+        Order It Right
+      </h2>
+      <p className="mt-4 max-w-2xl mx-auto text-muted-foreground">
+        Six teams · {TOTAL_ROUNDS} rounds. Each turn the team picks a security topic from the
+        board, then arranges the {5} steps in the correct order before the timer runs out.
+        Full marks only for a perfect order.
+      </p>
+
+      <div className="mt-8 grid sm:grid-cols-3 gap-3 max-w-2xl mx-auto text-left">
+        <Rule icon={<Sparkles className="w-4 h-4" />} title="Team picks the topic" body={`${CHOICES_PER_TURN} options on the board each turn.`} />
+        <Rule icon={<Timer className="w-4 h-4" />} title={`${TURN_SECONDS}s timer`} body="Lock in the order before it hits zero." />
+        <Rule icon={<Trophy className="w-4 h-4" />} title={`${PERFECT_POINTS} pts for perfect`} body="Any mistake = 0 for that turn." />
+      </div>
+
+      <button
+        onClick={onStart}
+        className="mt-10 inline-flex items-center gap-3 px-8 py-4 rounded-2xl text-lg font-semibold shadow-lg transition-transform hover:scale-[1.03]"
+        style={{
+          background: "var(--gradient-hero)",
+          color: "var(--primary-foreground)",
+          boxShadow: "var(--shadow-glow)",
+        }}
+      >
+        <Play className="w-5 h-5" fill="currentColor" /> Start game
+      </button>
+      <p className="mt-4 text-xs text-muted-foreground">
+        Turn order: {teams.join(" → ")}
+      </p>
+    </div>
+  );
+}
+
+function Rule({ icon, title, body }: { icon: React.ReactNode; title: string; body: string }) {
+  return (
+    <div className="rounded-xl border border-border bg-card/60 p-4">
+      <div className="flex items-center gap-2 text-primary font-semibold text-sm">
+        {icon} {title}
+      </div>
+      <div className="mt-1 text-xs text-muted-foreground">{body}</div>
+    </div>
+  );
+}
+
+function ChoiceCard({
+  team,
+  round,
+  totalRounds,
+  choices,
+  onPick,
+  onReshuffle,
+}: {
+  team: Team;
+  round: number;
+  totalRounds: number;
+  choices: number[];
+  onPick: (idx: number) => void;
+  onReshuffle: () => void;
+}) {
+  return (
+    <div
+      className="rounded-2xl p-6 sm:p-8 border border-border shadow-2xl"
+      style={{ background: "var(--gradient-card)" }}
+    >
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <div>
+          <div className="flex items-center gap-2 text-xs uppercase tracking-widest text-primary font-semibold">
+            <Sparkles className="w-4 h-4" /> Round {round} of {totalRounds}
+          </div>
+          <h2 className="mt-2 text-2xl sm:text-3xl font-bold leading-tight">
+            Team {team}, pick your topic
+          </h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            The team calls out an option — the host taps it to reveal the steps.
+          </p>
+        </div>
+        <div
+          className="w-16 h-16 rounded-2xl grid place-items-center text-3xl font-black shadow-lg shrink-0"
+          style={{
+            background: "var(--gradient-hero)",
+            color: "var(--primary-foreground)",
+            boxShadow: "var(--shadow-glow)",
+          }}
+        >
+          {team}
         </div>
       </div>
-    </header>
+
+      <div className="mt-6 grid sm:grid-cols-2 gap-3">
+        {choices.map((idx, i) => (
+          <button
+            key={idx}
+            onClick={() => onPick(idx)}
+            className="group text-left p-5 rounded-xl border border-border bg-card hover:border-primary transition-all hover:shadow-lg hover:scale-[1.02]"
+          >
+            <div className="flex items-center gap-3">
+              <div
+                className="w-10 h-10 rounded-lg grid place-items-center font-black text-lg shrink-0"
+                style={{ background: "var(--gradient-hero)", color: "var(--primary-foreground)" }}
+              >
+                {String.fromCharCode(65 + i)}
+              </div>
+              <div className="flex-1">
+                <div className="font-semibold leading-snug">{processes[idx].title}</div>
+                <div className="text-xs text-muted-foreground mt-0.5">
+                  {processes[idx].steps.length} steps
+                </div>
+              </div>
+              <ChevronRight className="w-5 h-5 text-muted-foreground group-hover:text-primary transition" />
+            </div>
+          </button>
+        ))}
+      </div>
+
+      <div className="mt-5 flex items-center justify-between flex-wrap gap-3">
+        <button
+          onClick={onReshuffle}
+          className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-border bg-card/60 hover:bg-card text-sm font-medium transition"
+        >
+          <Shuffle className="w-4 h-4" /> Shuffle options
+        </button>
+        <div className="text-xs text-muted-foreground">
+          {PERFECT_POINTS} pts if every step is in the correct place · 0 otherwise
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -316,7 +509,7 @@ function PlayCard({
           </div>
           <h2 className="mt-2 text-2xl sm:text-3xl font-bold leading-tight">{process.title}</h2>
           <p className="mt-1 text-sm text-muted-foreground">
-            Reorder the {process.steps.length} steps from first to last, then lock it in.
+            Arrange all {process.steps.length} steps in the exact correct order.
           </p>
         </div>
         <div className="flex items-center gap-3 shrink-0">
@@ -359,7 +552,6 @@ function PlayCard({
           }}
         />
       </div>
-
 
       <ol className="mt-6 space-y-2">
         {order.map((step, i) => (
@@ -415,7 +607,7 @@ function PlayCard({
           <RotateCcw className="w-4 h-4" /> Reshuffle
         </button>
         <div className="ml-auto text-xs text-muted-foreground">
-          Scoring: 1 pt per correct position · +2 bonus for a perfect run
+          {PERFECT_POINTS} pts only if every step is in the correct place
         </div>
       </div>
     </div>
@@ -433,13 +625,21 @@ function RevealCard({
   team: Team;
   process: { title: string; steps: string[] };
   userOrder: string[];
-  result: { points: number; correctPositions: number; timedOut: boolean };
+  result: { perfect: boolean; correctPositions: number; timedOut: boolean };
   isLast: boolean;
   onNext: () => void;
 }) {
-  const perfect = userOrder.every((s, i) => s === process.steps[i]);
-  const label = perfect ? "Perfect order!" : result.timedOut ? "Time's up!" : "Results";
-  const labelColor = perfect ? "var(--success)" : result.timedOut ? "var(--destructive)" : "var(--accent)";
+  const label = result.perfect
+    ? "Perfect order!"
+    : result.timedOut
+      ? "Time's up!"
+      : "Not quite";
+  const labelColor = result.perfect
+    ? "var(--success)"
+    : result.timedOut
+      ? "var(--destructive)"
+      : "var(--accent)";
+  const pointsAwarded = result.perfect ? PERFECT_POINTS : 0;
   return (
     <div
       className="rounded-2xl p-6 sm:p-8 border border-border shadow-2xl"
@@ -455,17 +655,24 @@ function RevealCard({
           </div>
           <h2 className="mt-1 text-2xl sm:text-3xl font-bold">{process.title}</h2>
           <p className="mt-1 text-muted-foreground">
-            Team <span className="text-foreground font-semibold">{team}</span> got{" "}
+            Team <span className="text-foreground font-semibold">{team}</span> placed{" "}
             <span className="text-foreground font-semibold">
               {result.correctPositions}/{process.steps.length}
             </span>{" "}
-            in place · earned <span className="text-foreground font-semibold">+{result.points}</span> pts
+            correctly · earned{" "}
+            <span
+              className="font-bold"
+              style={{ color: result.perfect ? "var(--success)" : "var(--destructive)" }}
+            >
+              +{pointsAwarded}
+            </span>{" "}
+            pts
           </p>
         </div>
         <div
           className="w-16 h-16 rounded-2xl grid place-items-center text-3xl font-black shadow-lg shrink-0"
           style={{
-            background: perfect
+            background: result.perfect
               ? "linear-gradient(135deg, var(--success), var(--primary-glow))"
               : "var(--gradient-hero)",
             color: "var(--primary-foreground)",
